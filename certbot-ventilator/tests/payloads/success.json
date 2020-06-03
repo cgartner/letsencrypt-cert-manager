@@ -1,0 +1,5 @@
+{
+    "certbot_server": "https://acme-staging-v02.api.letsencrypt.org/directory",
+    "email": "cgartner@pixsystem.com",
+    "s3_bucket": "accountcloudformationconstants-deploymentbucket-1dfa1c7nemvwc"
+}
