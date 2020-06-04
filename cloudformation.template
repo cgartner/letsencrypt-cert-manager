@@ -159,7 +159,8 @@ Resources:
             StateMachineName: letsencrypt-cert-manager
             RoleArn: !GetAtt [ StatesExecutionRole, Arn ]
             DefinitionString:
-                !Sub |
+                !Sub
+                - |-
                     {
                         "Comment": "Letsencrypt certificate management state machine",
                         "StartAt": "WhichCertificates",
@@ -168,7 +169,7 @@ Resources:
                                 "Comment": "Determines which certificates to cehck for existence and expiration",
                                 "Type": "Task",
                                 "InputPath": "$",
-                                "Resource": "${CertbotVentilator}",
+                                "Resource": "${VentilatorArn}",
                                 "TimeoutSeconds": 60,
                                 "ResultPath": "$",
                                 "Next": "ProcessCertificates",
@@ -207,7 +208,7 @@ Resources:
                                     "States": {
                                         "CheckCertificate": {
                                             "Type": "Task",
-                                            "Resource": "${CertbotRunner}",
+                                            "Resource": "${RunnerArn}",
                                             "End": true
                                         }
                                     }
@@ -234,6 +235,10 @@ Resources:
                             }
                         }
                     }
+                - {
+                    VentilatorArn: !GetAtt CertbotVentilator.Arn,
+                    RunnerArn: !GetAtt CertbotRunner.Arn,
+                  }
 
     StatesExecutionRole:
         Type: AWS::IAM::Role
@@ -256,8 +261,8 @@ Resources:
                         Action:
                             - lambda:InvokeFunction
                         Resource:
-                            - !Ref CertbotVentilator
-                            - !Ref CertbotRunner
+                            - !GetAtt CertbotVentilator.Arn
+                            - !GetAtt CertbotRunner.Arn
 
     TriggerRule:
         Type: AWS::Events::Rule

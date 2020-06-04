@@ -3,7 +3,10 @@ Letsencrypt is a great solution for creating and managing your own certificates,
 but the short lifespan of certificates leads towards a need for automating their
 lifecycle. The certbot tool is great for automating these tasks, but it often is
 setup to run on a standalone instance, restricting your certificate storage to
-a single point of failure.
+a single point of failure. After reading a blog post from Arkadiy Tetelman on
+[Deploying EFF's Certbot in AWS Lambda](https://arkadiyt.com/2018/01/26/deploying-effs-certbot-in-aws-lambda/),
+I found myself inspired to expand upon it to make a tool for managing multiple
+certificates within an organization.
 
 The Letsencrypt Cert Manager creates and updates certificates from Letsencrypt
 using AWS resources. Certificates are stored in ACM for use within AWS as needed,
@@ -32,22 +35,25 @@ the purpose of this README, we'll be assuming a bucket name of
 
 Package and upload the Certbot Runner Lambda via AWS SAM CLI:
 ```
-sam build --template certbot-runner/template.yaml && sam package --s3-bucket letsencrypt-cert-manager-bucket-012345
+sam build --template certbot-runner/template.yaml --use-container && sam package --s3-bucket letsencrypt-cert-manager-bucket-012345
 ```
 
 Package and upload the Certbot Validator Lambda via AWS SAM CLI:
 ```
-sam build --template certbot-validator/template.yaml && sam package --s3-bucket letsencrypt-cert-manager-bucket-012345
+sam build --template certbot-validator/template.yaml --use-container && sam package --s3-bucket letsencrypt-cert-manager-bucket-012345
 ```
 
-Deploy the CFN stack, passing in parameters for the bucket created above, along with keys for both uploaded Lambdas.
+The above `sam package` commands will return a CodeUri of where the package was
+uploaded to. Deploy the CFN stack, passing in parameters for the bucket created
+above, along with keys for both uploaded Lambdas (these will be a unique ID such
+as `869c184ef508ab4a94a70f5795bfb5c2`).
 ```
 aws cloudformation create-stack --stack-name letsencrypt-cert-manager \
 --template-body file://cloudformation.template \
 --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
 --parameters ParameterKey=CertManagerBucket,ParameterValue=letsencrypt-cert-manager-bucket-012345 \
-ParameterKey=CertbotRunnerKey,ParameterValue=key-12345 \
-ParameterKey=CertbotVentilatorKey,ParameterValue=key-12345
+ParameterKey=CertbotRunnerKey,ParameterValue=5a985c2e1365709a1d8493a36cb1c0f6 \
+ParameterKey=CertbotVentilatorKey,ParameterValue=869c184ef508ab4a94a70f5795bfb5c2
 ```
 
 Add a new domain (or domains) to a new row within the `subject_alternative_name`
@@ -265,7 +271,7 @@ If a certificate with more than 30 days left exists:
 
 ## Additional Resources
 
-- [Deploying Certbot in AWS Lambda](https://arkadiyt.com/2018/01/26/deploying-effs-certbot-in-aws-lambda/) - Inspiration for the Lambda came from this post
+- [Deploying EFF's Certbot in AWS Lambda](https://arkadiyt.com/2018/01/26/deploying-effs-certbot-in-aws-lambda/) - Inspiration for this system came from this post
 - [Dynamic Parallelism](https://medium.com/swlh/step-functions-dynamic-parallelism-fan-out-explained-83f911d5990) - StepFunction Dynamic Parallelism explained.
 - [Sample Map State](https://docs.aws.amazon.com/step-functions/latest/dg/sample-map-state.html) - Map State Examples
 
