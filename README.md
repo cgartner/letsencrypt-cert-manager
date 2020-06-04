@@ -130,21 +130,7 @@ which takes care of creating/updating a certificate if needed.
 
 #### Diagram
 
-```mermaid
-stateDiagram
-    [*] --> WhichCertificates
-    state WhichCertificates {
-        [*] --> ProcessCertificates1
-        ProcessCertificates1 --> [*]
-        --
-        [*] --> ProcessCertificates2
-        ProcessCertificates2 --> [*]
-        --
-        [*] --> ProcessCertificatesN
-        ProcessCertificatesN --> [*]
-    }
-    WhichCertificates --> [*]
-```
+![image](StepFunction.png)
 
 ### Certbot Ventilator Lambda
 
