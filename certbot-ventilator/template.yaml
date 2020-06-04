@@ -1,0 +1,12 @@
+AWSTemplateFormatVersion : '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Builds a list of certificates to create and fans out via step functions to certbot-runner.
+Resources:
+  CertbotVentilator:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.6
+      CodeUri: .
+      Timeout: 60
+      MemorySize: 128

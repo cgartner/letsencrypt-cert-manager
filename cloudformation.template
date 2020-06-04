@@ -1,0 +1,304 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: "Builds a list of certificates to create and fans out via step functions to certbot-runner."
+
+Parameters:
+    CertbotServer:
+        Type: String
+        Default: https://acme-v02.api.letsencrypt.org/directory
+        Description: URL of the letsencrypt server where certificates will be generated.
+
+    CertEmail:
+        Type: String
+        Default: certbot@my.org
+        Description: Email to be associated with certificates.
+
+    HostedZoneId:
+        Type: String
+        Default: "*"
+        Description: Route53 hosted zone we'll be managing certificates for.
+
+    CertManagerBucket:
+        Type: String
+        Description: Existing S3 bucket the Lambdas have been packaged and uploaded into before deploying this stack. Certificates will also be saved here under the 'certs' prefix.
+
+    CertbotRunnerKey:
+        Type: String
+        Description: Key of the location of the Certbot Runner Lambda package uploaded into the CertManagerBucket.
+
+    CertbotVentilatorKey:
+        Type: String
+        Description: Key of the location of the Certbot Ventilator Lambda package uploaded into the CertManagerBucket.
+
+Resources:
+    # Certbot Runner
+    CertbotRunnerRole:
+        Type: AWS::IAM::Role
+        Properties:
+            AssumeRolePolicyDocument:
+                Version: '2012-10-17'
+                Statement:
+                  - Effect: Allow
+                    Principal:
+                        Service: lambda.amazonaws.com
+                    Action: sts:AssumeRole
+            ManagedPolicyArns:
+                - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+    CertbotRunnerAccessPolicy:
+        Type: AWS::IAM::Policy
+        Properties:
+            PolicyName: CertbotRunnerAccessPolicy
+            Roles:
+              - !Ref CertbotRunnerRole
+            PolicyDocument:
+                Version: 2012-10-17
+                Statement:
+                  - Effect: Allow
+                    Action: 
+                        - route53:ListHostedZones
+                        - acm:ImportCertificate
+                        - acm:ListCertificates
+                    Resource: "*"
+                  - Effect: Allow
+                    Action:
+                        - route53:GetChange
+                        - route53:ChangeResourceRecordSets
+                        - acm:ImportCertificate
+                        - acm:DescribeCertificate
+                    Resource:
+                        - !Sub arn:aws:route53:::hostedzone/${HostedZoneId}
+                        - arn:aws:route53:::change/*
+                        - !Sub arn:aws:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
+                  - Effect: Allow
+                    Action:
+                        - s3:*
+                    Resource:
+                        - !Sub arn:aws:s3:::${CertManagerBucket}
+                        - !Sub arn:aws:s3:::${CertManagerBucket}/*
+    
+    CertbotRunner:
+        Type: AWS::Lambda::Function
+        Properties:
+            Description: Creates a certificate if it doesn't exist or is about to expire and uploads the files to S3.
+            FunctionName: certbot-runner
+            Handler: lambda_function.handler
+            MemorySize: 128
+            Runtime: python3.6
+            Role: !GetAtt CertbotRunnerRole.Arn
+            Timeout: 400
+            Code:
+                S3Bucket: !Ref CertManagerBucket
+                S3Key: !Ref CertbotRunnerKey
+
+    # Certbot Ventilator
+    CertbotVentilatorRole:
+        Type: AWS::IAM::Role
+        Properties:
+            AssumeRolePolicyDocument:
+                Version: '2012-10-17'
+                Statement:
+                  - Effect: Allow
+                    Principal:
+                        Service: lambda.amazonaws.com
+                    Action: sts:AssumeRole
+            ManagedPolicyArns:
+                - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+    CertbotVentilator:
+        Type: AWS::Lambda::Function
+        Properties:
+            Description: Builds a list of certificates to create and fans out via step functions to certbot-runner.
+            FunctionName: certbot-ventilator
+            Handler: lambda_function.handler
+            MemorySize: 128
+            Runtime: python3.6
+            Role: !GetAtt CertbotVentilatorRole.Arn
+            Timeout: 30
+            Code:
+                S3Bucket: !Ref CertManagerBucket
+                S3Key: !Ref CertbotVentilatorKey
+
+    # DynamoDB
+    CertsDynamo:
+        Type: AWS::DynamoDB::Table
+        Properties:
+            AttributeDefinitions:
+              - AttributeName: subject_alternative_name
+                AttributeType: S
+            KeySchema:
+              - AttributeName: subject_alternative_name
+                KeyType: HASH
+            ProvisionedThroughput:
+                ReadCapacityUnits: 25
+                WriteCapacityUnits: 25
+            TableName: certbot-ventilator-certificates
+
+    DynamoIAMPolicy:
+        Type: AWS::IAM::Policy
+        DependsOn:
+            - CertsDynamo
+        Properties:
+            Roles:
+                - !Ref CertbotVentilatorRole
+            PolicyName: CertbotVentilatorAllowDynamo
+            PolicyDocument:
+                Version: '2012-10-17'
+                Statement:
+                  - Effect: "Allow"
+                    Action:
+                        - dynamodb:GetItem
+                        - dynamodb:Scan
+                    Resource:
+                        - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${CertsDynamo}
+                        - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${CertsDynamo}/index/*
+
+    # Step Function
+    StateMachine:
+        Type: "AWS::StepFunctions::StateMachine"
+        Properties:
+            StateMachineName: letsencrypt-cert-manager
+            RoleArn: !GetAtt [ StatesExecutionRole, Arn ]
+            DefinitionString:
+                !Sub
+                - |-
+                    {
+                        "Comment": "Letsencrypt certificate management state machine",
+                        "StartAt": "WhichCertificates",
+                        "States": {
+                            "WhichCertificates": {
+                                "Comment": "Determines which certificates to cehck for existence and expiration",
+                                "Type": "Task",
+                                "InputPath": "$",
+                                "Resource": "${VentilatorArn}",
+                                "TimeoutSeconds": 60,
+                                "ResultPath": "$",
+                                "Next": "ProcessCertificates",
+                                "Retry": [
+                                    {
+                                        "ErrorEquals": [
+                                            "States.Timeout"
+                                        ],
+                                        "MaxAttempts": 2,
+                                        "IntervalSeconds": 3
+                                    },
+                                    {
+                                        "ErrorEquals": [
+                                            "States.TaskFailed"
+                                        ],
+                                        "MaxAttempts": 2,
+                                        "BackoffRate": 2,
+                                        "IntervalSeconds": 3
+                                    }
+                                ]
+                            },
+                            "ProcessCertificates": {
+                                "Comment": "Dynamically processes each certificate with a Lambda",
+                                "Type": "Map",
+                                "InputPath": "$",
+                                "ItemsPath": "$.domains",
+                                "MaxConcurrency": 1,
+                                "Parameters": {
+                                    "certbot_server.$": "$.certbot_server",
+                                    "domains.$": "$$.Map.Item.Value",
+                                    "email.$": "$.email",
+                                    "s3_bucket.$": "$.s3_bucket"
+                                },
+                                "Iterator": {
+                                    "StartAt": "CheckCertificate",
+                                    "States": {
+                                        "CheckCertificate": {
+                                            "Type": "Task",
+                                            "Resource": "${RunnerArn}",
+                                            "End": true
+                                        }
+                                    }
+                                },
+                                "ResultPath": "$.results",
+                                "End": true,
+                                "Retry": [
+                                    {
+                                        "ErrorEquals": [
+                                            "States.Timeout"
+                                        ],
+                                        "MaxAttempts": 3,
+                                        "IntervalSeconds": 3
+                                    },
+                                    {
+                                        "ErrorEquals": [
+                                            "States.TaskFailed"
+                                        ],
+                                        "MaxAttempts": 3,
+                                        "BackoffRate": 2,
+                                        "IntervalSeconds": 3
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                - {
+                    VentilatorArn: !GetAtt CertbotVentilator.Arn,
+                    RunnerArn: !GetAtt CertbotRunner.Arn,
+                  }
+
+    StatesExecutionRole:
+        Type: AWS::IAM::Role
+        Properties:
+            AssumeRolePolicyDocument:
+                Version: 2012-10-17
+                Statement:
+                  - Effect: Allow
+                    Principal:
+                        Service:
+                            - !Sub states.${AWS::Region}.amazonaws.com
+                    Action: sts:AssumeRole
+            Path: /
+            Policies:
+              - PolicyName: LetsencryptCertManagerAllowStepFunctions
+                PolicyDocument:
+                    Version: 2012-10-17
+                    Statement:
+                      - Effect: Allow
+                        Action:
+                            - lambda:InvokeFunction
+                        Resource:
+                            - !GetAtt CertbotVentilator.Arn
+                            - !GetAtt CertbotRunner.Arn
+
+    TriggerRule:
+        Type: AWS::Events::Rule
+        Properties:
+            Description: Execute the certificate state machine, which checks for which certificates to process via certbot-ventilator and passes them off to certbot-runner.
+            ScheduleExpression: "cron(0 17 * * ? *)"
+            Targets:
+                - Id: TriggerRule
+                  Arn: !Ref StateMachine
+                  RoleArn: !GetAtt TriggerExecutionRole.Arn
+                  Input: !Sub |
+                        {
+                            "certbot_server": "${CertbotServer}",
+                            "email": "${CertEmail}",
+                            "s3_bucket": "${CertManagerBucket}"
+                        }
+
+    TriggerExecutionRole:
+        Type: "AWS::IAM::Role"
+        Properties:
+            AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                  - Effect: "Allow"
+                    Principal:
+                        Service:
+                            - !Sub events.amazonaws.com
+                    Action: "sts:AssumeRole"
+            Path: "/"
+            Policies:
+              - PolicyName: LetsencyptCertManagerStepFunctionsEventRule
+                PolicyDocument:
+                    Version: "2012-10-17"
+                    Statement:
+                      - Effect: Allow
+                        Action:
+                            - "states:StartExecution"
+                        Resource:
+                            - !Ref StateMachine
