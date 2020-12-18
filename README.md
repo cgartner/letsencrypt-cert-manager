@@ -38,9 +38,9 @@ Package and upload the Certbot Runner Lambda via AWS SAM CLI:
 sam build --template certbot-runner/template.yaml --use-container && sam package --s3-bucket letsencrypt-cert-manager-bucket-012345
 ```
 
-Package and upload the Certbot Validator Lambda via AWS SAM CLI:
+Package and upload the Certbot Ventilator Lambda via AWS SAM CLI:
 ```
-sam build --template certbot-validator/template.yaml --use-container && sam package --s3-bucket letsencrypt-cert-manager-bucket-012345
+sam build --template certbot-ventilator/template.yaml --use-container && sam package --s3-bucket letsencrypt-cert-manager-bucket-012345
 ```
 
 The above `sam package` commands will return a CodeUri of where the package was

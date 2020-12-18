@@ -34,7 +34,7 @@ def lambda_handler(event, context):
 
         dynamodb = boto3.resource('dynamodb')
 
-        table = dynamodb.Table(f'{env}-{LAMBDANAME}-certificates')
+        table = dynamodb.Table(f'{LAMBDANAME}-certificates')
         # Scanning is an expensive operation, but at the current scale of our certs this won't be an issue
         scan_results = table.scan()
         for i in scan_results["Items"]:
